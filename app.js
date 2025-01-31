@@ -21,7 +21,7 @@ mongoose
 
 // Modelo de datos para sesiones
 const SessionSchema = new mongoose.Schema({
-  sessionID: {type:String, required: true, unique:true},
+  sessionID: {type:String, required: true,default:uuidv4, unique:true},
   email: {type:String, required:true},
   nickname: {type:String, required:true},
   status:{
@@ -29,16 +29,21 @@ const SessionSchema = new mongoose.Schema({
     enum:["Activa", "Inactiva", "Finalizada por el usuario", "Finalizada por fallo del sistema"],
     default:"Activa"
   },
-  createdAt: {type:Date, default:Date.now},
-  lastAccessed: {type:Date, default:Date.now},
+  createdAt: {type:Date, default:()=> moment().tz("America/Mexico_City").toDate()},
+  lastAccessed: {type:Date, default:()=> moment().tz("America/Mexico_City").toDate()},
   clientData:{
-    macAddress:{type:String},
-    clientIp:{type:String}
+    macAddress:{type:String, required:true},
+    clientIp:{type:String, required:true}
 
   },
   serverData:{
-    serverIp: {type:String},
-    serverMac: {type:String}
+    serverIp: {type:String, required:true},
+    serverMac: {type:String, required:true}
+  },
+  inactivityTime:{
+    hours:{type:Number, required:true, min:0},
+    minutes:{type:Number,required:true, min:0, max:59},
+    seconds:{type:Number,required:true, min:0, max:59}
   }
   
 });
