@@ -133,8 +133,7 @@ app.post('/login', async (req, res) => {
       createdAt: createdAt_CDMX,
       lastAccessed: createdAt_CDMX,
       clientData: {
-        macAddress,
-        clientIp: getClientIp(req)
+        macAddress
       },
       serverData: {
         serverIp: getLocalIp(),
@@ -153,149 +152,106 @@ app.post('/login', async (req, res) => {
       res.status(500).json({ message: 'Error al guardar la sesión' });
     }
   });
-  
-
-/*app.post('/login', async (req, res) => {
-  const { email, nickname, macAddress } = req.body;
-  if (!email || !nickname || !macAddress) {
-    return res.status(400).json({
-      message: 'Se esperan campos requeridos'
-    });
-  }
-
-  const sessionID = uuidv4();
-  const createdAt_CDMX = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
-
-  req.session.email = email;
-  req.session.sessionID = sessionID;
-  req.session.nickname = nickname;
-  req.session.macAddress = macAddress;
-    req.session.createdAt = createdAt_CDMX;
-  req.session.lastAccessed = createdAt_CDMX;
-  req.session.serverIp = getLocalIp();
-  req.session.serverMac = await getServerMac();
-
-  sessions[sessionID] = req.session;
-
-  // Guardar la sesión en la base de datos
-  const sessionData = new SessionModel({
-    sessionID,
-    email,
-    nickname,
-    macAddress,
-    createdAt: createdAt_CDMX,
-    lastAccessed: createdAt_CDMX,
-    serverIp: req.session.serverIp,
-    serverMac: req.session.serverMac,
-  });
-
-  try {
-    await sessionData.save();
-    res.status(200).json({
-      message: 'Se ha logueado de manera exitosa',
-      sessionID
-    });
-  } catch (error) {
-    console.error('Error al guardar la sesión:', error);
-    res.status(500).json({ message: 'Error al guardar la sesión' });
-  }
-});*/
 
 
-
-app.post('/logout', async (req, res) => {
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
+  app.post('/logout', async (req, res) => {
+    if (!req.session.sessionID) {
+        return res.status(404).json({ message: 'No existe una sesión activa' });
     }
 
     const sessionID = req.session.sessionID;
-
-    // Actualizar el estado de la sesión en la base de datos (opcional)
     try {
         await SessionModel.updateOne(
-            { sessionID }, // Filtro por el ID de la sesión
-            { $set: { active: false, lastAccessed: moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss') } } // Cambia el estado a inactivo
+            { sessionID },
+            { $set: { status: 'Finalizada por el usuario', lastAccessed: moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss') } }
         );
+
+        delete sessions[sessionID];
+
+        req.session.destroy((err) => {
+            if (err) {
+                return res.status(500).json({ message: 'Error al cerrar sesión' });
+            }
+            res.status(200).json({ message: 'Logout exitoso' });
+        });
     } catch (error) {
-        console.error('Error al actualizar el estado de la sesión:', error);
-        return res.status(500).json({ message: 'Error al cerrar la sesión en la base de datos' });
+        console.error('Error al cerrar la sesión:', error);
+        res.status(500).json({ message: 'Error interno del servidor' });
     }
-
-    // Eliminar la sesión activa en memoria
-    delete sessions[sessionID];
-
-    // Destruir la sesión en el servidor
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({
-                message: 'Error al cerrar sesión'
-            });
-        }
-    });
-
-    res.status(200).json({
-        message: 'Logout exitoso'
-    });
 });
 
-app.post('/update', (req, res) => {
-    const { email, nickname } = req.body;
+app.post('/update', async (req, res) => {
+  const { email, nickname } = req.body;
 
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
+  if (!req.session.sessionID) {
+      return res.status(404).json({ message: 'No existe una sesión activa' });
+  }
 
-    if (email) req.session.email = email;
-    if (nickname) req.session.nickname = nickname;
-    req.session.lastAccessed = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
+  const sessionID = req.session.sessionID;
+  const updateFields = {};
+  if (email) updateFields.email = email;
+  if (nickname) updateFields.nickname = nickname;
+  updateFields.lastAccessed = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
 
-    sessions[req.session.sessionID] = req.session;
+  try {
+      await SessionModel.updateOne(
+          { sessionID },
+          { $set: updateFields }
+      );
 
-    res.status(200).json({
-        message: 'Datos actualizados',
-        session: req.session
-    });
+      res.status(200).json({ message: 'Datos actualizados en la base de datos' });
+  } catch (error) {
+      console.error('Error al actualizar los datos de la sesión:', error);
+      res.status(500).json({ message: 'Error interno del servidor' });
+  }
 });
 
-app.get('/status', (req, res) => {
-    const sessionID = req.query.sessionID;
-    if (!sessionID || !sessions[sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
+app.get('/status', async (req, res) => {
+  const sessionID = req.query.sessionID;
+  if (!sessionID) {
+      return res.status(400).json({ message: 'Se requiere un sessionID' });
+  }
 
-    res.status(200).json({
-        message:"Sesion Activa",
-        session:sessions[sessionID]
-    })
+  try {
+      const session = await SessionModel.findOne({ sessionID });
+      if (!session) {
+          return res.status(404).json({ message: 'Sesión no encontrada' });
+      }
+
+      session.createdAt = moment(session.createdAt).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
+      session.lastAccessed = moment(session.lastAccessed).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
+
+      res.status(200).json({
+          message: 'Estado de la sesión',
+          session
+      });
+  } catch (error) {
+      console.error('Error al obtener el estado de la sesión:', error);
+      res.status(500).json({ message: 'Error interno del servidor' });
+  }
 });
 
-app.get('/sessions', (req, res) => {
-    if (Object.keys(sessions).length === 0) {
-        return res.status(404).json({
-            message: 'No hay sesiones activas'
-        });
-    }
+app.get('/sessions', async (req, res) => {
+  try {
+      const activeSessions = await SessionModel.find();
+      if (activeSessions.length === 0) {
+          return res.status(404).json({ message: 'No hay sesiones registradas' });
+      }
 
-    const formattedSessions = {};
-    for (const sessionID in sessions) {
-        const session = sessions[sessionID];
-        formattedSessions[sessionID] = {
-            ...session,
-            createdAt: moment(session.createdAt).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss'),
-            lastAccessed: moment(session.lastAccessed).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss')
-        };
-    }
+      const formattedSessions = activeSessions.map(session => ({
+          ...session._doc,
+          createdAt: moment(session.createdAt).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss'),
+          lastAccessed: moment(session.lastAccessed).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss')
+      }));
 
-    res.status(200).json({
-        message: 'Sesiones activas',
-        sessions: formattedSessions
-    });
+      res.status(200).json({
+          message: 'Listado de sesiones',
+          sessions: formattedSessions
+      });
+  } catch (error) {
+      console.error('Error al obtener las sesiones:', error);
+      res.status(500).json({ message: 'Error interno del servidor' });
+  }
 });
 
 setInterval(() => {
