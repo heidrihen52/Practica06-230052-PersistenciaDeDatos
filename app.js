@@ -1,314 +1,35 @@
-import express from 'express';
-import session from 'express-session';
-import bodyParser from 'body-parser';
-import { v4 as uuidv4 } from 'uuid';
-import os, { type } from 'os';
-import macaddress from 'macaddress';
-import moment from 'moment-timezone';
-import mongoose from 'mongoose';
+import Session from "./sessions.js";
+import express from 'express'
+import session from 'express-session'
+import mongoose from "mongoose";
+import bodyParser from 'body-parser'
+import {v4 as uuidv4} from 'uuid'
+import moment from 'moment-timezone'
+import os from 'os'
 
+
+mongoose.connect('mongodb+srv://230052:Taco1995@hadrycluster.lbdby.mongodb.net/API-AWI4_0-230052?retryWrites=true&w=majority').then((db)=>console.log('Mongo atlas connected'))
 const app = express();
-const PORT = 3000;
-
-// MongoDB Atlas URI
-const MONGO_URI = 'mongodb+srv://230052:Taco1995@hadrycluster.lbdby.mongodb.net/API-AWI4_0-230052?retryWrites=true&w=majority'; 
-
-// Conectar a MongoDB Atlas
-mongoose
-  .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('Conectado a MongoDB Atlas'))
-  .catch((error) => console.error('Error al conectar con MongoDB Atlas:', error));
-
-// Modelo de datos para sesiones
-const SessionSchema = new mongoose.Schema({
-  sessionID: {type:String, required: true,default:uuidv4, unique:true},
-  email: {type:String, required:true},
-  nickname: {type:String, required:true},
-  status:{
-    type:String,
-    enum:["Activa", "Inactiva", "Finalizada por el usuario", "Finalizada por fallo del sistema"],
-    default:"Activa"
-  },
-  createdAt: {type:Date, default:()=> moment().tz("America/Mexico_City").toDate()},
-  lastAccessed: {type:Date, default:()=> moment().tz("America/Mexico_City").toDate()},
-  clientData:{
-    macAddress:{type:String, required:true},
-    clientIp:{type:String, required:true}
-
-  },
-  serverData:{
-    serverIp: {type:String, required:true},
-    serverMac: {type:String, required:true}
-  },
-  inactivityTime:{
-    hours:{type:Number, required:true, min:0},
-    minutes:{type:Number,required:true, min:0, max:59},
-    seconds:{type:Number,required:true, min:0, max:59}
-  }
-  
-});
-
-const SessionModel = mongoose.model('Session', SessionSchema);
-
-app.listen(PORT, () => {
-  console.log(`Server iniciado en http://localhost:${PORT}`);
-});
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-const sessions = {};
-
-app.use(
-  session({
-    secret: "p4-APJ#pixelg7hadry-SesionesHTTP",
-    resave: false,
-    saveUninitialized: true,
-    cookie: { maxAge: 5 * 60 * 1000 }
-  })
-);
-
-app.get('/', (req, res) => {
-  return res.status(200).json({
-    message: 'Bienvenido a la API de control de sesiones',
-    author: 'Adrián Pérez Jiménez'
-  });
-});
-
-const getClientIp = (req) =>{
-    return(
-        req.header["x-forwarded-for"] ||
-        req.connection.remoteAddress ||
-        req.socket.remoteAddress ||
-        req.connection.socket?.remoteAddress
-    )
-}
-
-const getLocalIp = () => {
-  const networkInterfaces = os.networkInterfaces();
-  for (const interfaceName in networkInterfaces) {
-    const interfaces = networkInterfaces[interfaceName];
-    for (const iface of interfaces) {
-      if (iface.family === "IPv4" && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return null;
-};
-
-const getServerMac = () => {
-  return new Promise((resolve, reject) => {
-    macaddress.one((err, mac) => {
-      if (err) {
-        reject(err);
-      }
-      resolve(mac);
-    });
-  });
-};
-
-app.post('/login', async (req, res) => {
-    const { email, nickname, macAddress } = req.body;
-    if (!email || !nickname || !macAddress) {
-      return res.status(400).json({
-        message: 'Se esperan campos requeridos'
-      });
-    }
-  
-    const sessionID = uuidv4();
-    const createdAt_CDMX = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss'); // Convertido a Date
-  
-    req.session.email = email;
-    req.session.sessionID = sessionID;
-    req.session.nickname = nickname;
-    req.session.createdAt = createdAt_CDMX;
-    req.session.lastAccessed = createdAt_CDMX;
-    req.session.clientData = { macAddress, clientIp: getClientIp(req) };
-    req.session.serverData = { serverIp: getLocalIp(), serverMac: await getServerMac() };
-  
-    sessions[sessionID] = req.session;
-  
-    // Guardar la sesión en la base de datos
-    const sessionData = new SessionModel({
-      sessionID,
-      email,
-      nickname,
-      status: "Activa", // Estado inicial
-      createdAt: createdAt_CDMX,
-      lastAccessed: createdAt_CDMX,
-      clientData: {
-        macAddress
-      },
-      serverData: {
-        serverIp: getLocalIp(),
-        serverMac: await getServerMac()
-      }
-    });
-  
-    try {
-      await sessionData.save();
-      res.status(200).json({
-        message: 'Se ha logueado de manera exitosa',
-        sessionID
-      });
-    } catch (error) {
-      console.error('Error al guardar la sesión:', error);
-      res.status(500).json({ message: 'Error al guardar la sesión' });
-    }
-  });
-
-
-  app.post('/logout', async (req, res) => {
-    if (!req.session.sessionID) {
-        return res.status(404).json({ message: 'No existe una sesión activa' });
-    }
-
-    const sessionID = req.session.sessionID;
-    try {
-        await SessionModel.updateOne(
-            { sessionID },
-            { $set: { status: 'Finalizada por el usuario', lastAccessed: moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss') } }
-        );
-
-        delete sessions[sessionID];
-
-        req.session.destroy((err) => {
-            if (err) {
-                return res.status(500).json({ message: 'Error al cerrar sesión' });
-            }
-            res.status(200).json({ message: 'Logout exitoso' });
-        });
-    } catch (error) {
-        console.error('Error al cerrar la sesión:', error);
-        res.status(500).json({ message: 'Error interno del servidor' });
-    }
-});
-
-app.post('/update', async (req, res) => {
-  const { email, nickname } = req.body;
-
-  if (!req.session.sessionID) {
-      return res.status(404).json({ message: 'No existe una sesión activa' });
-  }
-
-  const sessionID = req.session.sessionID;
-  const updateFields = {};
-  if (email) updateFields.email = email;
-  if (nickname) updateFields.nickname = nickname;
-  updateFields.lastAccessed = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
-
-  try {
-      await SessionModel.updateOne(
-          { sessionID },
-          { $set: updateFields }
-      );
-
-      res.status(200).json({ message: 'Datos actualizados en la base de datos' });
-  } catch (error) {
-      console.error('Error al actualizar los datos de la sesión:', error);
-      res.status(500).json({ message: 'Error interno del servidor' });
-  }
-});
-
-app.get('/status', async (req, res) => {
-  const sessionID = req.query.sessionID;
-  if (!sessionID) {
-      return res.status(400).json({ message: 'Se requiere un sessionID' });
-  }
-
-  try {
-      const session = await SessionModel.findOne({ sessionID });
-      if (!session) {
-          return res.status(404).json({ message: 'Sesión no encontrada' });
-      }
-
-      session.createdAt = moment(session.createdAt).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
-      session.lastAccessed = moment(session.lastAccessed).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
-
-      res.status(200).json({
-          message: 'Estado de la sesión',
-          session
-      });
-  } catch (error) {
-      console.error('Error al obtener el estado de la sesión:', error);
-      res.status(500).json({ message: 'Error interno del servidor' });
-  }
-});
-
-app.get('/sessions', async (req, res) => {
-  try {
-      const activeSessions = await SessionModel.find();
-      if (activeSessions.length === 0) {
-          return res.status(404).json({ message: 'No hay sesiones registradas' });
-      }
-
-      const formattedSessions = activeSessions.map(session => ({
-          ...session._doc,
-          createdAt: moment(session.createdAt).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss'),
-          lastAccessed: moment(session.lastAccessed).tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss')
-      }));
-
-      res.status(200).json({
-          message: 'Listado de sesiones',
-          sessions: formattedSessions
-      });
-  } catch (error) {
-      console.error('Error al obtener las sesiones:', error);
-      res.status(500).json({ message: 'Error interno del servidor' });
-  }
-});
-
-setInterval(() => {
-    const now = moment();
-    for (const sessionID in sessions) {
-        const session = sessions[sessionID];
-        const idleTime = now.diff(moment(session.lastAccessed, 'YYYY/MM/DD HH:mm:ss'), 'seconds');
-        if (idleTime > 120) { 
-            delete sessions[sessionID];
-        }
-    }
-}, 60000);
-
-/*
-import express from 'express';
-import session from 'express-session';
-import bodyParser from 'body-parser';
-import { v4 as uuidv4 } from 'uuid';
-import os from 'os';
-import macaddress from 'macaddress';
-
-const app = express();
-const PORT = 3000;
-
-app.listen(PORT, () => {
-    console.log(`Server iniciado en http://localhost:${PORT}`);
-});
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-const sessions = {};
-
-app.use(
-    session({
-        secret: "p4-APJ#pixelg7hadry-SesionesHTTP",
-        resave: false,
-        saveUninitialized: true,
-        cookie: { maxAge: 5 * 60 * 1000 }
-    })
-);
-
-app.get('/', (req, res) => {
-    return res.status(200).json({
-        message: 'Bienvendio a la API de control de sesiones',
-        author: 'Adrián Pérez Jiménez'
-    });
-});
-
+app.use(express.urlencoded({extended:true}))
+app.use(express.json())
+app.listen(3000,()=>{
+    console.log("Server running on port: 3000")
+})
+app.use(session({
+    secret:"p6-APJ#pixelg7hadry-SesionesHTTP/VarialesDeSesion",
+    resave:false,
+    saveUninitialized:false,
+    cookie:{maxAge:5*60*1000}
+}))
+const sessions = {}
 const getClientIp = (req) => {
-    return req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress || req.connection.socket.remoteAddress;
-}
+    let ip = req.header("x-forwarded-for") || req.connection.remoteAddress || req.socket.remoteAddress || req.connection.socket?.remoteAddress;
+    if (ip && ip.startsWith("::ffff:")) {
+        ip = ip.substring(7);
+    }
+
+    return ip;
+};
 
 const getLocalIp = () => {
     const networkInterfaces = os.networkInterfaces();
@@ -322,128 +43,270 @@ const getLocalIp = () => {
     }
     return null; 
 };
-
-const getServerMac = () => {
-    return new Promise((resolve, reject) => {
-        macaddress.one((err, mac) => {
-            if (err) {
-                reject(err);
+const getServerNetworkInfo = () => {
+    const interfaces = os.networkInterfaces();
+    for (const name in interfaces){
+        for (const iface of interfaces[name]){
+            if (iface.family === 'IPv4' && !iface.internal){
+                return {
+                    serverIp: iface.address,
+                    serverMac: iface.mac
+                }
             }
-            resolve(mac);
-        });
-    });
+        }
+    }
+}
+const getServerMacAddress = () => {
+    const networkInterfaces = os.networkInterfaces();
+    for (let interfaceName in networkInterfaces) {
+        const interfaceInfo = networkInterfaces[interfaceName];
+        for (let i = 0; i < interfaceInfo.length; i++) {
+            const address = interfaceInfo[i];
+            if (address.family === 'IPv4' && !address.internal) {
+                return address.mac
+            }
+        }
+    }
+    return null; 
 };
 
-app.post('/login', async (req, res) => {
+const auth = async (req, res, next) => {
+    const sessionId = req.query.sessionId || req.body.sessionId;
+    
+    try {
+        const session = await Session.findOne({ sessionID: sessionId });
+        
+        if (!session) {
+            return res.status(401).json({ message: "Sesión no válida" });
+        }
+        
+        if (!req.originalUrl.includes("/status")) { 
+            session.lastAccess = moment().tz("America/Mexico_City").toDate();
+            await session.save();
+        }
+        const ahora = moment();
+        const ultimoAcceso = moment(session.lastAccess);
+        const diferencia = ahora.diff(ultimoAcceso, "seconds");
+        session.inactivityTime = {
+            hours: Math.floor(diferencia / 3600),
+            minutes: Math.floor((diferencia % 3600) / 60),
+            seconds: diferencia % 60,
+        };
+        await session.save();
+        if (diferencia >= 120) {
+            session.status = "Finalizada por Error del Sistema";
+            await session.save();
+            return res.status(401).json({ message: "Sesión cerrada por inactividad" });
+        }
+
+        next();
+    } catch (error) {
+        res.status(500).json({ message: "Error de autenticación", error: error.message });
+    }
+};
+app.get('/',(req,res)=>{
+    return res.status(200).json({
+        message:"Bienvenido al API de Control de Sesiones",
+        author: "Adrián Pérez Jiménez",
+    })
+})
+// Login endpoint
+app.post("/login", async (req, res) => {
     const { email, nickname, macAddress } = req.body;
-    if (!email || !nickname || !macAddress ) {
-        return res.status(400).json({
-            message: 'Se esperan campos requeridos'
+    
+    try {
+        const serverMac = getServerMacAddress();
+        const serverIp = getLocalIp();
+
+        const newSession = await Session.create({
+            email,
+            nickname,
+            clientData: {
+                ip: getClientIp(req),
+                macAddress
+            },
+            serverData: {
+                ip: serverIp,
+                macAddress: serverMac
+            },
+            status: "Activa",
+            inactivityTime: { hours: 0, minutes: 0, seconds: 0 }, // Inicializar a 0
+            createdAt: moment().tz("America/Mexico_City").toDate(), // <-- Fecha en CDMX
+            lastAccess: moment().tz("America/Mexico_City").toDate() // <-- Fecha en CDMX
         });
+
+        res.status(201).json({
+            message: "Sesión creada exitosamente",
+            sessionId: newSession.sessionID
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: "Error al crear sesión", error: error.message });
     }
-
-    const sessionID = uuidv4();
-    req.session.email = email;
-    req.session.sessionID = sessionID;
-    req.session.nickname = nickname;
-    req.session.macAddress = macAddress;
-    req.session.createdAt = new Date();
-    req.session.lastAccessed = new Date();
-    req.session.serverIp = getLocalIp();
-    req.session.serverMac = await getServerMac();
-
-    sessions[sessionID] = req.session;
-
-    res.status(200).json({
-        message: 'Se ha logueado de manera exitosa',
-        sessionID
-    });
 });
-
-app.post("/logout", (req, res) => {
-    const { email, nickname } = req.body;
-
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
-    if (email) req.session.email = email;
-    if (nickname) req.session.nickname = nickname;
-
-    delete sessions[req.session.sessionID];
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({
-                message: 'Error al cerrar sesión'
+    //Logout endpoint
+    app.post("/logout", async (req, res) => {
+        const { sessionId } = req.body;
+      
+        try {
+          const session = await Session.findOneAndUpdate(
+            { sessionID: sessionId },
+            { 
+              $set: { 
+                status: "Finalizada por el Usuario",
+                lastAccess: moment().tz("America/Mexico_City").toDate()
+              } 
+            },
+            { new: true }
+          );
+      
+          if (!session) {
+            return res.status(404).json({ message: "Sesión no encontrada" });
+          }
+      
+          res.status(200).json({ message: "Sesión finalizada exitosamente" });
+      
+        } catch (error) {
+          res.status(500).json({ message: "Error al cerrar sesión", error: error.message });
+        }
+      });
+    //Actualización de la Sesión
+    app.put("/update", auth, async (req, res) => {
+        const { sessionId, email, nickname } = req.body;
+    
+        try {
+            const updatedSession = await Session.findOneAndUpdate(
+                { sessionID: sessionId },
+                {
+                    $set: {
+                        email,
+                        nickname,
+                        lastAccess: moment().tz("America/Mexico_City").toDate(), // Actualizar lastAccess
+                        inactivityTime: { hours: 0, minutes: 0, seconds: 0 } // Reiniciar inactividad
+                    }
+                },
+                { new: true }
+            );
+    
+            if (!updatedSession) {
+                return res.status(404).json({ message: "Sesión no encontrada" });
+            }
+    
+            res.status(200).json({
+                message: "Sesión actualizada",
+                session: updatedSession
             });
+    
+        } catch (error) {
+            res.status(500).json({ message: "Error al actualizar sesión", error: error.message });
         }
     });
 
-    res.status(200).json({
-        message: 'Logout exitoso'
-    });
-});
+    //Estatus
+   app.get("/status", auth, async (req, res) => {
+    const { sessionId } = req.query;
 
-app.post("/update", (req, res) => {
-    const { email, nickname } = req.body;
-
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
-    if (email) req.session.email = email;
-    if (nickname) req.session.nickname = nickname;
-    req.session.lastAccessed = new Date();
-
-    sessions[req.session.sessionID] = req.session;
-
-    res.status(200).json({
-        message: 'Datos actualizados',
-        session: req.session
-    });
-});
-
-app.get("/status", (req, res) => {
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
-
-    const session = sessions[req.session.sessionID];
-    const now = new Date();
-    const idleTime = (now - new Date(session.lastAccessed)) / 1000;
-    const duration = (now - new Date(session.createdAt)) / 1000; 
-
-    res.status(200).json({
-        message: 'Sesión activa',
-        session,
-        idleTime: `${idleTime} segundos`,
-        duration: `${duration} segundos`
-    });
-});
-app.get('/sessionactives', (req, res) => {
-    if (Object.keys(sessions).length === 0) {
-        return res.status(404).json({
-            message: 'No hay sesiones activas'
-        });
-    }
-    res.status(200).json({
-        message: 'Sesiones activas',
-        sessions
-    });
-});
-
-setInterval(() => {
-    const now = new Date();
-    for (const sessionID in sessions) {
-        const session = sessions[sessionID];
-        const idleTime = (now - new Date(session.lastAccessed)) / 1000; 
-        if (idleTime > 120) { // 2 minutos
-            delete sessions[sessionID];
+    try {
+        const session = await Session.findOne({ sessionID: sessionId });
+        
+        if (!session) {
+            return res.status(404).json({ message: "Sesión no encontrada" });
         }
+        
+        // No actualizamos lastAccess aquí
+        const formattedSession = {
+            ...session.toObject(),
+            createdAt: moment(session.createdAt).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss"),
+            lastAccess: moment(session.lastAccess).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss")
+        };
+
+        res.status(200).json({
+            message: "Sesión activa",
+            session: formattedSession
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: "Error al obtener sesión", error: error.message });
     }
-}, 60000);
-*/
+});
+
+    // Endpoint para obtener la lista de sesiones activas
+    app.get("/sessions", async (req, res) => {
+        try {
+            const allSessions = await Session.find({});
+            const ahora = moment();
+    
+            // Actualizar inactividad y cerrar sesiones expiradas
+            for (const session of allSessions) {
+                const ultimoAcceso = moment(session.lastAccess);
+                const diferencia = ahora.diff(ultimoAcceso, "seconds");
+    
+                // Actualizar inactividad
+                session.inactivityTime = {
+                    hours: Math.floor(diferencia / 3600),
+                    minutes: Math.floor((diferencia % 3600) / 60),
+                    seconds: diferencia % 60,
+                };
+    
+                // Cerrar sesiones inactivas > 2 minutos
+                if (diferencia >= 120 && session.status === "Activa") {
+                    session.status = "Finalizada por Error del Sistema";
+                }
+    
+                await session.save();
+            }
+    
+            // Obtener sesiones actualizadas
+            const updatedSessions = await Session.find({});
+    
+            // Formatear fechas correctamente para la zona horaria de Mexico
+            const formattedSessions = updatedSessions.map(session => {
+                return {
+                    ...session.toObject(),
+                    createdAt: moment(session.createdAt).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss"),
+                    lastAccess: moment(session.lastAccess).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss")
+                };
+            });
+    
+            res.status(200).json({
+                message: "Todas las sesiones",
+                sessions: formattedSessions,
+            });
+    
+        } catch (error) {
+            res.status(500).json({ message: "Error al obtener sesiones", error: error.message });
+        }
+    });
+    
+    // Actualizar idle_activity para todas las sesiones
+    app.get("/allCurrentSessions", async (req, res) => {
+        try {
+            const activeSessions = await Session.find({ status: "Activa" });
+            const ahora = moment();
+    
+            // Actualizar inactividad en tiempo real
+            for (const session of activeSessions) {
+                const ultimoAcceso = moment(session.lastAccess);
+                const diferencia = ahora.diff(ultimoAcceso, "seconds");
+    
+                // Actualizar inactividad
+                session.inactivityTime = {
+                    hours: Math.floor(diferencia / 3600),
+                    minutes: Math.floor((diferencia % 3600) / 60),
+                    seconds: diferencia % 60,
+                };
+                await session.save();
+            }
+    
+            // Obtener solo las sesiones que siguen activas después de la actualización
+            const currentActiveSessions = await Session.find({ status: "Activa" });
+            
+            res.status(200).json({
+                count: currentActiveSessions.length,
+                sessions: currentActiveSessions,
+            });
+    
+        } catch (error) {
+            res.status(500).json({ message: "Error al obtener sesiones", error: error.message });
+        }
+    });
