@@ -327,3 +327,16 @@ app.post("/login", async (req, res) => {
             res.status(500).json({ message: "Error al obtener sesiones", error: error.message });
         }
     });
+
+  app.post('/deleteAllSessions', async (req, res) => {
+      try {
+          // Eliminar todas las sesiones de la base de datos
+          await Session.deleteMany({});
+          res.status(200).json({ message: "Todas las sesiones han sido eliminadas correctamente" });
+      } catch (error) {
+          res.status(500).json({ 
+              message: "Error al eliminar las sesiones", 
+              error: error.message 
+          });
+      }
+  });
