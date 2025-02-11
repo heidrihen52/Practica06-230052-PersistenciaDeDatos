@@ -12,12 +12,12 @@ const sessionSchema = new Schema({
     nickname: { type: String, required: true },
     createdAt: {
       type: Date,
-      default: () => moment().tz("America/Mexico_City").toDate(),
+      default: () => moment().tz("America/Mexico_City").format(),
       required: true
     },
     lastAccess: {
       type: Date,
-      default: () => moment().tz("America/Mexico_City").toDate(),
+      default: () => moment().tz("America/Mexico_City").format(),
       required: true
     },
     status: {
@@ -41,7 +41,7 @@ const sessionSchema = new Schema({
     }
   },{
     versionKey:false,
-    timestamps:true
+    timestamps:false
   });
   
   export default model('Session', sessionSchema);
