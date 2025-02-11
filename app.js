@@ -72,16 +72,10 @@ const getServerMacAddress = () => {
 
 const auth = async (req, res, next) => {
     const sessionId = req.query.sessionId || req.body.sessionId;
-    
     try {
         const session = await Session.findOne({ sessionID: sessionId });
-        
         if (!session) {
             return res.status(401).json({ message: "Sesión no válida" });
-        }
-        if (!req.originalUrl.includes("/status")) { 
-            session.lastAccess = moment().tz("America/Mexico_City").toDate();
-            await session.save();
         }
         const ahora = moment();
         const ultimoAcceso = moment(session.lastAccess);
@@ -91,17 +85,23 @@ const auth = async (req, res, next) => {
             minutes: Math.floor((diferencia % 3600) / 60),
             seconds: diferencia % 60,
         };
+        
+        if (diferencia >= 30 && session.status === "Activa") {
+            session.status = "Inactiva"; // Cambia a inactiva después de 1 minuto
+        }
         await session.save();
+        
         if (diferencia >= 120) {
             session.status = "Finalizada por Error del Sistema";
-            await session.save();
-            return res.status(401).json({ message: "Sesión cerrada por inactividad" });
         }
+        
+        await session.save();
         next();
     } catch (error) {
         res.status(500).json({ message: "Error de autenticación", error: error.message });
     }
 };
+
 app.get('/',(req,res)=>{
     return res.status(200).json({
         message:"Bienvenid@ al API de control de sesiones",
@@ -198,26 +198,20 @@ const { sessionId, email, nickname } = req.body;
 
 app.get("/status", auth, async (req, res) => {
     const { sessionId } = req.query;
-
     try {
         const session = await Session.findOne({ sessionID: sessionId });
-        
         if (!session) {
             return res.status(404).json({ message: "Sesión no encontrada" });
         }
-        
-        // No actualizamos lastAccess aquí
         const formattedSession = {
             ...session.toObject(),
             createdAt: moment(session.createdAt).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss"),
             lastAccess: moment(session.lastAccess).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss")
         };
-
         res.status(200).json({
             message: "Sesión activa",
             session: formattedSession
         });
-
     } catch (error) {
         res.status(500).json({ message: "Error al obtener sesión", error: error.message });
     }
@@ -225,79 +219,78 @@ app.get("/status", auth, async (req, res) => {
 
 
 app.get("/sessions", async (req, res) => {
-     try {
+    try {
         const allSessions = await Session.find({});
         const ahora = moment();
-    
-        // Actualizar inactividad y cerrar sesiones expiradas
+        
         for (const session of allSessions) {
             const ultimoAcceso = moment(session.lastAccess);
             const diferencia = ahora.diff(ultimoAcceso, "seconds");
-    
-        // Actualizar inactividad
-        session.inactivityTime = {
-            hours: Math.floor(diferencia / 3600),
-            minutes: Math.floor((diferencia % 3600) / 60),
-            seconds: diferencia % 60,
-        };
-    
-        // Cerrar sesiones inactivas > 2 minutos
-        if (diferencia >= 120 && session.status === "Activa") {
-            session.status = "Finalizada por Error del Sistema";
-        }
-    
-            await session.save();
-        }
-    
-            // Obtener sesiones actualizadas
-            const updatedSessions = await Session.find({});
-    
-            // Formatear fechas correctamente para la zona horaria de Mexico
-            const formattedSessions = updatedSessions.map(session => {
-                return {
-                    ...session.toObject(),
-                    createdAt: moment(session.createdAt).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss"),
-                    lastAccess: moment(session.lastAccess).tz("America/Mexico_City").format("YYYY-MM-DD HH:mm:ss")
-                };
-            });
-    
-            res.status(200).json({
-                message: "Todas las sesiones: "+formattedSessions.length,
-                sessions: formattedSessions,
-            });
-    
-        } catch (error) {
-            res.status(500).json({ message: "Error al obtener sesiones", error: error.message });
-        }
-    });
-// Actualizar idle_activity para todas las sesiones
-app.get("/allCurrentSessions", async (req, res) => {
-    try {
-        const activeSessions = await Session.find({ status: "Activa" });
-        const ahora = moment();
-    
-        for (const session of activeSessions) {
-            const ultimoAcceso = moment(session.lastAccess);
-            const diferencia = ahora.diff(ultimoAcceso, "seconds");
-    
+            
             session.inactivityTime = {
                 hours: Math.floor(diferencia / 3600),
                 minutes: Math.floor((diferencia % 3600) / 60),
                 seconds: diferencia % 60,
-                };
-                await session.save();
-            }
-            const currentActiveSessions = await Session.find({ status: "Activa" });
+            };
             
-            res.status(200).json({
-                message:"Todas las sesiones actuales: "+currentActiveSessions.length,
-                sessions: currentActiveSessions,
-            });
-    
-        } catch (error) {
-            res.status(500).json({ message: "Error al obtener sesiones", error: error.message });
+            if (diferencia >= 30 && session.status === "Activa") {
+                session.status = "Inactiva";
+            }
+            await session.save();
+            
+            if (diferencia >= 120) {
+                session.status = "Finalizada por Error del Sistema";
+            }
+            await session.save();
         }
-    });
+        
+        const updatedSessions = await Session.find({});
+        res.status(200).json({
+            message: "Lista de sesiones actualizadas",
+            sessions: updatedSessions
+        });
+    } catch (error) {
+        res.status(500).json({ message: "Error al obtener sesiones", error: error.message });
+    }
+});
+
+
+app.get("/allCurrentSessions", async (req, res) => {
+    try {
+        const activeSessions = await Session.find({ status: { $in: ["Activa", "Inactiva"] } });
+        const ahora = moment();
+        
+        for (const session of activeSessions) {
+            const ultimoAcceso = moment(session.lastAccess);
+            const diferencia = ahora.diff(ultimoAcceso, "seconds");
+            
+            session.inactivityTime = {
+                hours: Math.floor(diferencia / 3600),
+                minutes: Math.floor((diferencia % 3600) / 60),
+                seconds: diferencia % 60,
+            };
+            
+            if (diferencia >= 30 && session.status === "Activa") {
+                session.status = "Inactiva";
+            }
+            await session.save();
+            
+            if (diferencia >= 120) {
+                session.status = "Finalizada por Error del Sistema";
+            }
+            await session.save();
+        }
+        
+        const updatedActiveSessions = await Session.find({ status: { $in: ["Activa", "Inactiva"] } });
+        res.status(200).json({
+            message: "Lista de sesiones activas e inactivas actualizadas",
+            sessions: updatedActiveSessions
+        });
+    } catch (error) {
+        res.status(500).json({ message: "Error al obtener sesiones activas", error: error.message });
+    }
+});
+
 app.delete('/deleteAllSessions', async (req, res) => {
     try {
           await Session.deleteMany({});
