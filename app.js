@@ -4,9 +4,14 @@ import mongoose from "mongoose";
 import session from 'express-session'
 import moment from 'moment-timezone'
 import os from 'os'
+import cors from 'cors'
 
 mongoose.connect('mongodb+srv://230052:Taco1995@hadrycluster.lbdby.mongodb.net/API-AWI4_0-230052?retryWrites=true&w=majority').then((db)=>console.log('MongoDB atlas connected 🌱'))
 const app = express();
+
+// Configurar CORS
+app.use(cors())
+
 app.use(express.urlencoded({extended:true}))
 app.use(express.json())
 app.listen(3000,()=>{
